@@ -1,0 +1,179 @@
+diff --git a/src/output.c b/src/output.c
+index 4b1bb0d..1a5bb30 100644
+--- a/src/output.c
++++ b/src/output.c
+@@ -22,13 +22,12 @@
+ #include "system.h"
+ 
+ #include <filename.h> /* IS_PATH_WITH_DIR */
++#include <error.h>
+ #include <get-errno.h>
+ #include <mbswidth.h>
+ #include <path-join.h>
+ #include <quotearg.h>
+-#include <spawn-pipe.h>
+ #include <timevar.h>
+-#include <wait-process.h>
+ 
+ #include "complain.h"
+ #include "files.h"
+@@ -721,7 +720,8 @@ static void
+ output_skeleton (void)
+ {
+   /* Compute the names of the package data dir and skeleton files.  */
+-  char const *m4 = m4path ();
++  /* WCRT's getenv storage may be reused by the next getenv call.  */
++  char *m4 = xstrdup (m4path ());
+   char const *datadir = pkgdatadir ();
+   char *skeldir = xpath_join (datadir, "skeletons");
+   char *m4sugar = xpath_join (datadir, "m4sugar/m4sugar.m4");
+@@ -736,87 +736,56 @@ output_skeleton (void)
+      cheap sanity check is worthwhile.  */
+   xfclose (xfopen (m4sugar, "r"));
+ 
+-  /* Create an m4 subprocess connected to us via two pipes.  */
+-
+-  int filter_fd[2];
+-  pid_t pid;
+-  {
+-    char const *argv[11];
+-    int i = 0;
+-    argv[i++] = m4;
+-
+-    /* When POSIXLY_CORRECT is set, GNU M4 1.6 and later disable GNU
+-       extensions, which Bison's skeletons depend on.  With older M4,
+-       it has no effect.  M4 1.4.12 added a -g/--gnu command-line
+-       option to make it explicit that a program wants GNU M4
+-       extensions even when POSIXLY_CORRECT is set.
+-
+-       See the thread starting at
+-       <https://lists.gnu.org/r/bug-bison/2008-07/msg00000.html>
+-       for details.  */
+-    if (*M4_GNU_OPTION)
+-      argv[i++] = M4_GNU_OPTION;
+-
+-    argv[i++] = "-I";
+-    argv[i++] = datadir;
+-    /* Some future version of GNU M4 (most likely 1.6) may treat the
+-       -dV in a position-dependent manner.  See the thread starting at
+-       <https://lists.gnu.org/r/bug-bison/2008-07/msg00000.html>
+-       for details.  */
+-    if (trace_flag & trace_m4_early)
+-      argv[i++] = "-dV";
+-    argv[i++] = m4sugar;
+-    argv[i++] = "-";
+-    argv[i++] = m4bison;
+-    if (trace_flag & trace_m4)
+-      argv[i++] = traceon;
+-    argv[i++] = skel;
+-    argv[i++] = NULL;
+-    aver (i <= ARRAY_CARDINALITY (argv));
+-
+-    if (trace_flag & trace_tools)
+-      {
+-        fputs ("running:", stderr);
+-        for (int j = 0; argv[j]; ++j)
+-          fprintf (stderr, " %s", argv[j]);
+-        fputc ('\n', stderr);
+-      }
+-
+-    pid = create_pipe_bidi ("m4", m4, argv,
+-                            /* directory */ NULL,
+-                            /* null_stderr */ false,
+-                            /* slave_process */ true,
+-                            /* exit_on_error */ true,
+-                            filter_fd);
+-  }
+-
+-  free (skeldir);
+-  free (m4sugar);
+-  free (m4bison);
+-  free (traceon);
+-  free (skel);
++  /* WCRT 0.9.5 intentionally has no POSIX descriptor/pipe layer.  Use
++     temporary files and cmd.exe redirection to exchange data with M4.  */
++  char muscle_name[L_tmpnam];
++  char output_name[L_tmpnam];
++  if (!tmpnam (muscle_name) || !tmpnam (output_name))
++    error (EXIT_FAILURE, get_errno (), _("cannot create temporary file"));
+ 
+   if (trace_flag & trace_muscles)
+     muscles_output (stderr);
+   {
+-    FILE *out = xfdopen (filter_fd[1], "w");
++    FILE *out = xfopen (muscle_name, "w");
+     muscles_output (out);
+     xfclose (out);
+   }
+ 
+-  /* Read and process m4's output.  */
++  size_t command_size = (strlen (m4) + strlen (datadir) + strlen (m4sugar)
++                         + strlen (m4bison) + strlen (traceon) + strlen (skel)
++                         + strlen (muscle_name) + strlen (output_name) + 128);
++  char *command = xmalloc (command_size);
++  snprintf (command, command_size,
++            "\"\"%s\" %s -I \"%s\" %s \"%s\" - \"%s\" %s \"%s\""
++            " < \"%s\" > \"%s\"\"",
++            m4, *M4_GNU_OPTION ? M4_GNU_OPTION : "", datadir,
++            trace_flag & trace_m4_early ? "-dV" : "", m4sugar, m4bison,
++            trace_flag & trace_m4 ? traceon : "", skel,
++            muscle_name, output_name);
++  if (trace_flag & trace_tools)
++    fprintf (stderr, "running: %s\n", command);
++
+   timevar_push (tv_m4);
++  int m4_status = system (command);
++  free (command);
++  if (m4_status != 0)
++    error (EXIT_FAILURE, 0, _("m4 subprocess failed"));
+   {
+-    FILE *in = xfdopen (filter_fd[0], "r");
++    FILE *in = xfopen (output_name, "r");
+     scan_skel (in);
+-    /* scan_skel should have read all of M4's output.  Otherwise, when we
+-       close the pipe, we risk letting M4 report a broken-pipe to the
+-       Bison user.  */
+     aver (feof (in));
+     xfclose (in);
+   }
+-  wait_subprocess (pid, "m4", false, false, true, true, NULL);
+   timevar_pop (tv_m4);
++
++  remove (muscle_name);
++  remove (output_name);
++  free (m4);
++  free (skeldir);
++  free (m4sugar);
++  free (m4bison);
++  free (traceon);
++  free (skel);
+ }
+ 
+ static void
+diff --git a/lib/strerror_r.c b/lib/strerror_r.c
+index 90043c2..e07a57d 100644
+--- a/lib/strerror_r.c
++++ b/lib/strerror_r.c
+@@ -251,6 +251,14 @@ strerror_r (int errnum, char *buf, size_t buflen)
+ 
+ # if defined __NetBSD__ || defined __hpux || (defined _WIN32 && !defined __CYGWIN__) || defined __CYGWIN__ /* NetBSD, HP-UX, native Windows, Cygwin */
+ 
++#  if defined BISON_WCRT
++    {
++      const char *errmsg = strerror (errnum);
++      ret = errmsg == NULL || *errmsg == '\0'
++            ? EINVAL : safe_copy (buf, buflen, errmsg);
++    }
++#  else
++
+     /* NetBSD:         sys_nerr, sys_errlist are declared through _NETBSD_SOURCE
+                        and <errno.h> above.
+        HP-UX:          sys_nerr, sys_errlist are declared explicitly above.
+@@ -287,6 +295,7 @@ strerror_r (int errnum, char *buf, size_t buflen)
+       }
+     else
+       ret = EINVAL;
++#  endif
+ 
+ # elif defined __sgi || (defined __sun && !defined _LP64) /* IRIX, Solaris <= 9 32-bit */
+
