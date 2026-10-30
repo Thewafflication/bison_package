@@ -14,7 +14,7 @@ if ($tinyCc -like '*i386-win32-tcc.exe') {
     exit $LASTEXITCODE
 } elseif ($tinyCc -like '*x86_64-win32-tcc.exe') {
     # 64-bit Windows build – use VS lib.exe for x64
-    $lib = 'C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx86\x64\lib.exe'
+    $lib = 'C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe'
     & $lib /OUT:$Archive @Objects
     exit $LASTEXITCODE
 } else {

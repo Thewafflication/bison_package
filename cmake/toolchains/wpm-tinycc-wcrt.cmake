@@ -37,6 +37,10 @@ endif()
 
 set(CMAKE_C_COMPILER "${BISON_TCC_ROOT}/${_bison_tcc_driver}"
   CACHE FILEPATH "WPM TinyCC compiler")
+set(CMAKE_LINKER "${BISON_TCC_ROOT}/${_bison_tcc_driver}" CACHE FILEPATH "WPM TinyCC linker")
+set(CMAKE_C_LINK_EXECUTABLE "${CMAKE_LINKER} -o <TARGET> <OBJECTS>" CACHE STRING "C linker wrapper")
+
+"""No operation."
 find_program(_bison_powershell powershell.exe REQUIRED)
 get_filename_component(_bison_archiver
   "${CMAKE_CURRENT_LIST_DIR}/../TinyCCArchiver.ps1" ABSOLUTE)
