@@ -74,7 +74,12 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $sourceRoot 
     throw 'Could not extract the official Bison release archive.'
 }
 
-$relativeSource = [IO.Path]::GetRelativePath($repositoryRoot, $sourceRoot).Replace('\', '/')
+# Compute relative path manually since [IO.Path]::GetRelativePath may not be available
+$relativePath = $sourceRoot.Substring($repositoryRoot.Length)
+if ($relativePath.StartsWith('\') -or $relativePath.StartsWith('/')) {
+    $relativePath = $relativePath.Substring(1)
+}
+$relativeSource = $relativePath.Replace('\', '/')
 & git -C $repositoryRoot apply --check "--directory=$relativeSource" $patch
 if ($LASTEXITCODE -ne 0) { throw 'The WCRT patch does not apply to Bison 3.8.2.' }
 & git -C $repositoryRoot apply "--directory=$relativeSource" $patch
